@@ -1,8 +1,7 @@
-# MATLAB adapter (scaffold)
+# MATLAB adapter
 
-Implement the MATLAB adapter here. It must call across the FFI boundary only:
+The MATLAB package API is under `+obinexus/+polycall`. The MEX gateway converts
+the configuration path to UTF-8 and calls `matlab_polycall_run_config`, whose
+only operation is `polycall_ffi_run_config(config_path, 1)`.
 
-    status = polycall_ffi_run_config("matlab-polycallrc", /*run=*/1)
-
-Return/raise a MATLAB-native error when `status` is non-zero. Do not parse
-config or duplicate any core logic. See ../../../docs/adapter-pattern.md.
+No configuration parsing or runtime policy belongs in this binding.
