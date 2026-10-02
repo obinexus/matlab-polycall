@@ -1,25 +1,17 @@
-function status = runConfig(configPath)
-%RUNCONFIG Run a libpolycall configuration and return its status.
+function status = runConfig(configPath, strict)
+%RUNCONFIG Validate a Polycall configuration file and return its status.
+%   STATUS = obinexus.polycall.runConfig(CONFIGPATH) calls
+%   polycall_ffi_run_config(CONFIGPATH, 1) in libpolycall and returns the
+%   status unchanged as int32 (0 = POLYCALL_OK, negative = POLYCALL_E_*).
+%   STRICT = false validates instead (unknown keys are warnings).
+%   Omitting the path uses "matlab-polycallrc".
 
-if nargin == 0
+if nargin < 1
     configPath = "matlab-polycallrc";
 end
-
-if isstring(configPath)
-    if ~isscalar(configPath)
-        error("OBINexus:Polycall:ConfigType", ...
-            "The configuration path must be a string scalar.");
-    end
-    configPath = char(configPath);
-elseif ischar(configPath)
-    if size(configPath, 1) ~= 1
-        error("OBINexus:Polycall:ConfigType", ...
-            "The configuration path must be a character row vector.");
-    end
-else
-    error("OBINexus:Polycall:ConfigType", ...
-        "The configuration path must be text.");
+if nargin < 2
+    strict = true;
 end
-
-status = matlab_polycall_mex(configPath);
+configPath = obinexus.polycall.textArg(configPath, "configPath");
+status = matlab_polycall_mex('run_config', configPath, double(logical(strict)));
 end

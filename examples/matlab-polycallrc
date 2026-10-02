@@ -1,4 +1,5 @@
-# Example MATLAB runtime override
+# Example MATLAB runtime override (same grammar as `polycall config validate`;
+# loaded with polycall_ffi_run_config(path, 1) through the MEX gateway)
 log_level=debug
 max_connections=128
 network_timeout=2000

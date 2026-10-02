@@ -1,8 +1,11 @@
-# matlab-polycallrc - read-only MATLAB runtime overrides for libpolycall
+# matlab-polycallrc - read-only MATLAB runtime overrides for Polycall
 #
-# This file uses the SHARED polycall schema (src/config/polycall_config_schema.c).
-# It introduces no new keys or parser: the MATLAB adapter passes this path to
-# the core via the FFI boundary. Values here override polycallrc for MATLAB.
+# Grammar: the core's own configuration grammar -- what
+# `polycall config validate <file>` checks and polycall_ffi_run_config()
+# loads (docs/BINDING_ABI.md). obinexus.polycall.runConfig passes this path
+# to polycall_ffi_run_config(path, 1) through the MEX gateway; nothing in
+# this binding parses it. Strict run mode: unknown keys are errors and
+# tls_enabled=true is refused (this build has no TLS transport).
 
 log_level=info
 max_connections=1000

@@ -1,13 +1,15 @@
 {
   "name": "matlab-polycall",
   "package": "@obinexusltd/matlab-polycall",
-  "version": "1.5.0",
+  "version": "1.1.0",
   "language": "MATLAB",
   "adapter": true,
   "ffi": true,
   "entry_point": "polycall_ffi_run_config",
+  "gateway": "matlab_polycall_mex (MEX, C layer src/matlab_polycall.c)",
   "config": "matlab-polycallrc",
-  "core": "../../src",
+  "core": "polycall >= 1.1.0 (binding ABI 1)",
+  "core_repository": "https://github.com/obinexus/polycall",
   "license": "MIT",
   "author": "Nnamdi Michael Okpala"
 }
