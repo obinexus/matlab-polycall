@@ -3,14 +3,18 @@ classdef Peer < handle
     %   p = obinexus.polycall.Peer("alpha", "127.0.0.1:0", token)
     %   p.register("beta", "127.0.0.1:9002");
     %   p.send("beta", uint8([0 1 2]), "m-1");
-    %   [from, id, bytes] = p.recv(5000);   % Inf waits; cancel()/close() wake it
+    %   [from, id, bytes] = p.recv(5000);   % Inf waits until a message arrives
     %   p.close();
     %   Each node owns its registry and inbox. Failures raise MException
     %   'polycall:E_<NAME>'; any call after close raises
-    %   'polycall:E_INVALID_HANDLE'.
+    %   'polycall:E_INVALID_HANDLE'. Deleting an open Peer closes it.
+    %   MATLAB runs MEX calls on its one interpreter thread, so a recv
+    %   blocked there can only end by message or timeout; cancel() wakes
+    %   receivers blocked on other (native) threads.
 
     properties (SetAccess = private)
         Handle = int32(0)
+        Closed = false
     end
 
     methods
@@ -29,14 +33,19 @@ classdef Peer < handle
 
         function close(obj)
             matlab_polycall_mex('peer_close', double(obj.Handle));
+            obj.Closed = true;
+        end
+
+        function tf = isOpen(obj)
+            tf = obj.Handle > 0 && ~obj.Closed;
         end
 
         function delete(obj)
-            if obj.Handle > 0
+            if obj.Handle > 0 && ~obj.Closed
                 try
                     matlab_polycall_mex('peer_close', double(obj.Handle));
                 catch
-                    % already closed
+                    % the core refused the handle: nothing left to release
                 end
             end
         end

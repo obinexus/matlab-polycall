@@ -8,17 +8,29 @@
  * "polycall:E_<NAME>" and a message carrying the status code, its
  * polycall_strerror() text and the polycall_last_error() detail -- except
  * 'run_config', which returns the int32 status (the documented
- * obinexus.polycall.runConfig contract).
+ * obinexus.polycall.runConfig contract) and, as a second output, the detail.
+ *
+ * Text crosses as UTF-8: arguments are converted with mxArrayToUTF8String,
+ * and outputs that can carry arbitrary text (describe / call JSON, the
+ * run_config detail) are returned as uint8 UTF-8 bytes, which the M files
+ * decode with native2unicode(bytes, 'UTF-8'); mxCreateString would decode
+ * them in the user's default encoding instead (e.g. windows-1252).
+ *
+ * While any peer opened here is still open the MEX file is locked
+ * (mexLock), so "clear mex" / "clear all" cannot unload it -- and with it
+ * libpolycall -- while the core's listener threads are running.
  *
  * Commands:
  *   abi -> double            version -> char           strerror(code) -> char
- *   run_config(path[, strict=1]) -> int32 status       describe(path) -> char JSON
- *   call(endpoint, service, operation, input_json, timeout_ms) -> char JSON
+ *   [status, detail] = run_config(path[, strict=1])  -> int32, uint8 UTF-8
+ *   describe(path) -> uint8 UTF-8 JSON
+ *   call(endpoint, service, operation, input_json, timeout_ms) -> uint8 UTF-8 JSON
+ *   open_peers -> double (peers opened through this MEX file, not yet closed)
  *   peer_open(node_id, bind_or_empty, token_or_empty) -> int32 handle
  *   peer_close(h)  peer_cancel(h)  peer_register(h, id, endpoint)  peer_unregister(h, id)
  *   peer_endpoint(h) peer_node_id(h) peer_list(h) peer_health(h) -> char
  *   peer_ping(h, peer, timeout_ms)
- *   peer_send(h, peer, payload(uint8|char), message_id_or_empty, timeout_ms)
+ *   peer_send(h, peer, payload(uint8|int8|char), message_id_or_empty, timeout_ms)
  *   [sender, id, payload(uint8)] = peer_recv(h, timeout_ms)   (Inf = wait)
  *
  * Builds with MATLAB `mex -R2018a` and with GNU Octave `mkoctfile --mex`.
@@ -27,9 +39,18 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "matlab_polycall.h"
+
+#if defined(octave_mex_h)
+/* GNU Octave keeps char data as UTF-8 bytes, so mxArrayToString already
+ * yields UTF-8 (and older Octave releases have no mxArrayToUTF8String). */
+#define POLYCALL_MX_TO_UTF8(a) mxArrayToString(a)
+#else
+#define POLYCALL_MX_TO_UTF8(a) mxArrayToUTF8String(a)
+#endif
 
 static char *arg_string(const mxArray *a, const char *what)
 {
@@ -37,7 +58,7 @@ static char *arg_string(const mxArray *a, const char *what)
     if (!mxIsChar(a)) {
         mexErrMsgIdAndTxt("polycall:E_INVALID_ARGUMENT", "%s must be a character vector", what);
     }
-    s = mxArrayToUTF8String(a);
+    s = POLYCALL_MX_TO_UTF8(a);
     if (!s) mexErrMsgIdAndTxt("polycall:E_INVALID_ARGUMENT", "%s could not be converted to UTF-8", what);
     return s;
 }
@@ -106,6 +127,12 @@ static mxArray *bytes_array(const unsigned char *p, size_t n)
     return m;
 }
 
+/* UTF-8 text as a uint8 row (decoded by the M files) */
+static mxArray *utf8_bytes(const char *s)
+{
+    return bytes_array((const unsigned char *)s, strlen(s));
+}
+
 static void need_args(int nrhs, int n, const char *cmd)
 {
     if (nrhs != n) {
@@ -118,11 +145,11 @@ static void *mx_alloc(size_t n) { return mxMalloc((mwSize)n); }
 static void mx_free(void *p) { mxFree(p); }
 
 static int abi_checked = 0;
+static int open_peers = 0;   /* peers opened here and not yet closed = mexLock count */
 
 void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
 {
     char *cmd;
-    (void)nlhs;
     if (nrhs < 1) mexErrMsgIdAndTxt("polycall:E_INVALID_ARGUMENT", "usage: matlab_polycall_mex(command, args...)");
     if (!abi_checked) {
         char msg[200];
@@ -145,13 +172,20 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
         need_args(nrhs, 2, cmd);
         plhs[0] = mxCreateString(polycall_strerror((int)arg_scalar(prhs[1], "code")));
     } else if (!strcmp(cmd, "run_config")) {
-        char *path;
+        char *path, detail[1024];
         int strict = 1;
+        int32_t rc;
         if (nrhs != 2 && nrhs != 3) mexErrMsgIdAndTxt("polycall:E_INVALID_ARGUMENT", "run_config(path[, strict])");
         path = arg_string(prhs[1], "configPath");
         if (nrhs == 3) strict = arg_scalar(prhs[2], "strict") != 0;
-        plhs[0] = int32_scalar(matlab_polycall_validate_config(path, strict));
+        rc = matlab_polycall_validate_config(path, strict);
+        detail[0] = '\0';
+        if (rc != POLYCALL_OK) polycall_last_error(detail, sizeof detail);   /* same thread, right after */
         mxFree(path);
+        plhs[0] = int32_scalar(rc);
+        if (nlhs > 1) plhs[1] = utf8_bytes(detail);
+    } else if (!strcmp(cmd, "open_peers")) {
+        plhs[0] = mxCreateDoubleScalar((double)open_peers);
     } else if (!strcmp(cmd, "describe")) {
         char *path, *json = NULL;
         int32_t rc;
@@ -160,7 +194,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
         rc = matlab_polycall_describe(path, &json);
         mxFree(path);
         if (rc != POLYCALL_OK) raise_status(rc);
-        plhs[0] = mxCreateString(json);
+        plhs[0] = utf8_bytes(json);
         matlab_polycall_free(json);
     } else if (!strcmp(cmd, "call")) {
         char *ep, *svc, *op, *input, *json = NULL;
@@ -185,7 +219,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
             }
             mexErrMsgIdAndTxt(id, "%s", msg);
         }
-        plhs[0] = mxCreateString(json);
+        plhs[0] = utf8_bytes(json);
         matlab_polycall_free(json);
     } else if (!strcmp(cmd, "peer_open")) {
         char *node, *bind, *token;
@@ -203,10 +237,18 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
             mxFree(token);
         }
         check(rc);
+        mexLock();
+        ++open_peers;
         plhs[0] = int32_scalar(h);
     } else if (!strcmp(cmd, "peer_close")) {
+        int32_t rc;
         need_args(nrhs, 2, cmd);
-        check(polycall_peer_close(arg_handle(prhs[1])));
+        rc = polycall_peer_close(arg_handle(prhs[1]));
+        if (rc == POLYCALL_OK && open_peers > 0) {
+            --open_peers;
+            mexUnlock();
+        }
+        check(rc);
     } else if (!strcmp(cmd, "peer_cancel")) {
         need_args(nrhs, 2, cmd);
         check(polycall_peer_cancel(arg_handle(prhs[1])));
@@ -235,7 +277,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
         char *text = NULL;
         need_args(nrhs, 2, cmd);
         check(matlab_polycall_peer_text(what, arg_handle(prhs[1]), &text));
-        plhs[0] = mxCreateString(text);
+        plhs[0] = mxCreateString(text);   /* ids and host:port only: ASCII */
         matlab_polycall_free(text);
     } else if (!strcmp(cmd, "peer_ping")) {
         char *peer;
@@ -260,7 +302,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[])
             data = mxGetData(prhs[3]);
             len = mxGetNumberOfElements(prhs[3]);
         } else if (mxIsChar(prhs[3])) {
-            text = arg_string(prhs[3], "payload");
+            text = arg_string(prhs[3], "payload");   /* UTF-8 bytes of the text */
             data = text;
             len = strlen(text);
         } else {
