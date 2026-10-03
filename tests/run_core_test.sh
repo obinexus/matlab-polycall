@@ -1,14 +1,18 @@
 #!/bin/sh
-# Run a C-layer test binary against the REAL Polycall core:
+# Run a test command (the C-layer test binary, MATLAB or GNU Octave) against
+# the REAL Polycall core:
 #   - `polycall start` (RPC runtime)            -> MATLAB_POLYCALL_RUNTIME
+#   - `polycall daemon start` (RPC daemon)      -> MATLAB_POLYCALL_DAEMON
 #   - `polycall peer serve --print-messages`    -> MATLAB_POLYCALL_PEER
+# (all on ephemeral 127.0.0.1 ports, state under a private temp dir)
 # then check that every payload the test sent to the C node arrived with
 # exactly the bytes, sender id and message id it wrote to <scratch>/ml2c-*.bin.
 #
 #   sh tests/run_core_test.sh COMMAND [ARGS...]
 #     e.g.  sh tests/run_core_test.sh build/matlab_polycall_core_test
 #           sh tests/run_core_test.sh valgrind --error-exitcode=9 build/matlab_polycall_core_test
-# The scratch directory is passed as MATLAB_POLYCALL_SCRATCH. Set
+# The scratch directory is passed as MATLAB_POLYCALL_SCRATCH and the current
+# directory (the repository root) as MATLAB_POLYCALL_ROOT. Set
 # EXPECT_C_NODE_PAYLOADS=0 for commands that do not send to the C node.
 #
 # Needs: the polycall CLI ($POLYCALL_CLI or `polycall` on PATH), base64, od.
@@ -23,6 +27,7 @@ POLYCALL_DEV_TOKEN="ml-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 export POLYCALL_DEV_TOKEN
 pids=''
 cleanup() {
+    [ -f "$scratch/daemon/daemon.json" ] && "$cli" daemon stop --state-dir "$scratch/daemon" "$scratch/Polycallfile" >/dev/null 2>&1
     for p in $pids; do kill "$p" 2>/dev/null; done
     sleep 0.3
     rm -rf "$scratch"
@@ -40,13 +45,22 @@ while [ ! -s "$scratch/rt.ep" ] || [ ! -s "$scratch/peer.ep" ]; do
     [ "$i" -lt 100 ] || { echo "FAIL: polycall start / peer serve did not come up"; cat "$scratch"/*.log "$scratch/peer.out"; exit 1; }
     sleep 0.1
 done
+printf 'log_level=info\n' > "$scratch/Polycallfile"
+"$cli" daemon start --endpoint 127.0.0.1:0 --state-dir "$scratch/daemon" "$scratch/Polycallfile" ||
+    { echo "FAIL: polycall daemon start"; exit 1; }
+MATLAB_POLYCALL_DAEMON=$(sed -n 's/.*"endpoint":"\([^"]*\)".*/\1/p' "$scratch/daemon/daemon.json")
+[ -n "$MATLAB_POLYCALL_DAEMON" ] || { echo "FAIL: no daemon endpoint in daemon.json"; exit 1; }
 MATLAB_POLYCALL_RUNTIME=$(tr -d '\r\n' < "$scratch/rt.ep")
 MATLAB_POLYCALL_PEER=$(tr -d '\r\n' < "$scratch/peer.ep")
 MATLAB_POLYCALL_SCRATCH=$scratch
-# native Windows programs (MSYS2 / Git Bash) need a Windows path
-command -v cygpath >/dev/null 2>&1 && MATLAB_POLYCALL_SCRATCH=$(cygpath -m "$scratch")
-export MATLAB_POLYCALL_RUNTIME MATLAB_POLYCALL_PEER MATLAB_POLYCALL_SCRATCH
-echo "runtime $MATLAB_POLYCALL_RUNTIME, C peer node $MATLAB_POLYCALL_PEER, CLI $cli"
+MATLAB_POLYCALL_ROOT=$(pwd)
+# native Windows programs (MSYS2 / Git Bash) need Windows paths
+if command -v cygpath >/dev/null 2>&1; then
+    MATLAB_POLYCALL_SCRATCH=$(cygpath -m "$scratch")
+    MATLAB_POLYCALL_ROOT=$(cygpath -m "$MATLAB_POLYCALL_ROOT")
+fi
+export MATLAB_POLYCALL_RUNTIME MATLAB_POLYCALL_DAEMON MATLAB_POLYCALL_PEER MATLAB_POLYCALL_SCRATCH MATLAB_POLYCALL_ROOT
+echo "runtime $MATLAB_POLYCALL_RUNTIME, daemon $MATLAB_POLYCALL_DAEMON, C peer node $MATLAB_POLYCALL_PEER, CLI $cli"
 
 "$@"
 rc=$?

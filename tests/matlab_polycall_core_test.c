@@ -7,11 +7,18 @@
  * Environment (set by tests/run_core_test.sh):
  *   POLYCALL_CLI             the polycall CLI (for C CLI -> C layer sends)
  *   MATLAB_POLYCALL_RUNTIME  host:port of a running `polycall start`
+ *   MATLAB_POLYCALL_DAEMON   host:port of a running `polycall daemon start`
  *   MATLAB_POLYCALL_PEER     host:port of `polycall peer serve -n c-printer --print-messages`
  *   POLYCALL_DEV_TOKEN       the shared token of that node
  * Payloads sent to the printer node are also written to <scratch>/ml2c-*.bin
  * so the runner can compare them with what the C node printed.
  */
+#if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L   /* nanosleep, mkdir under -std=c11 */
+#endif
+#if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS   /* getenv, fopen and _wfopen are used as intended */
+#endif
 #include "matlab_polycall.h"
 
 #include <stdio.h>
@@ -19,6 +26,7 @@
 #include <string.h>
 
 #if defined(_WIN32)
+#include <direct.h>
 #include <process.h>
 #include <windows.h>
 typedef HANDLE thread_t;
@@ -28,8 +36,23 @@ static void thread_start(thread_t *t, unsigned (__stdcall *fn)(void *), void *ar
 { *t = (HANDLE)_beginthreadex(NULL, 0, fn, arg, 0, NULL); }
 static void thread_join(thread_t t) { WaitForSingleObject(t, INFINITE); CloseHandle(t); }
 static void sleep_ms(unsigned ms) { Sleep(ms); }
+/* UTF-8 path -> UTF-16 for the fixture helpers (fopen would use the ANSI code page) */
+static FILE *fopen_utf8(const char *path, const wchar_t *mode)
+{
+    wchar_t w[1024];
+    if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, w, 1024)) return NULL;
+    return _wfopen(w, mode);
+}
+static int mkdir_utf8(const char *path)
+{
+    wchar_t w[1024];
+    if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, w, 1024)) return -1;
+    return _wmkdir(w);
+}
+#define FOPEN_WB(p) fopen_utf8((p), L"wb")
 #else
 #include <pthread.h>
+#include <sys/stat.h>
 #include <time.h>
 typedef pthread_t thread_t;
 #define THREAD_FN void *
@@ -37,6 +60,8 @@ typedef pthread_t thread_t;
 static void thread_start(thread_t *t, void *(*fn)(void *), void *arg) { pthread_create(t, NULL, fn, arg); }
 static void thread_join(thread_t t) { pthread_join(t, NULL); }
 static void sleep_ms(unsigned ms) { struct timespec ts = { ms / 1000, (long)(ms % 1000) * 1000000L }; nanosleep(&ts, NULL); }
+static int mkdir_utf8(const char *path) { return mkdir(path, 0700); }
+#define FOPEN_WB(p) fopen((p), "wb")
 #endif
 
 static int checks = 0, failures = 0;
@@ -48,7 +73,7 @@ static const char *token;
 
 static void write_file(const char *path, const void *data, size_t len)
 {
-    FILE *f = fopen(path, "wb");
+    FILE *f = FOPEN_WB(path);
     if (!f) { perror(path); exit(2); }
     if (len) fwrite(data, 1, len, f);
     fclose(f);
@@ -107,7 +132,43 @@ static void test_config(void)
     CHECK(matlab_polycall_run_config(path) == POLYCALL_E_UNSUPPORTED, "tls_enabled=true -> E_UNSUPPORTED");
     CHECK(matlab_polycall_describe("matlab-polycallrc", &json) == POLYCALL_OK && json && json[0] == '{' &&
           strstr(json, "log_level"), "describe -> JSON with the file's keys");
-    matlab_polycall_free(json);
+    matlab_polycall_free(json); json = NULL;
+
+    /* describe output larger than the C layer's first 4096-byte guess (the
+     * core allows at most 64 peers per file: 60 peers with 50-byte ids) */
+    {
+        static char big[16384];
+        size_t n = 0;
+        int i;
+        n += (size_t)snprintf(big + n, sizeof big - n, "server node 8080:8084\npeer_node_id=alpha\n");
+        for (i = 0; i < 60; ++i) {
+            n += (size_t)snprintf(big + n, sizeof big - n,
+                                  "peer peer-%02d-abcdefghijklmnopqrstuvwxyz-0123456789-abcde 127.0.0.1:%d\n", i, 20000 + i);
+        }
+        snprintf(path, sizeof path, "%s/Polycallfile", dir);
+        write_file(path, big, n);
+        CHECK(matlab_polycall_describe(path, &json) == POLYCALL_OK && json && strlen(json) > 4096 &&
+              strstr(json, "\"peer-00-abcdefghijklmnopqrstuvwxyz-0123456789-abcde\":\"127.0.0.1:20000\"") &&
+              strstr(json, "\"peer-59-abcdefghijklmnopqrstuvwxyz-0123456789-abcde\":\"127.0.0.1:20059\""),
+              "describe grows its buffer past 4096 bytes (60 peers)");
+        matlab_polycall_free(json); json = NULL;
+    }
+
+    /* non-ASCII (UTF-8) directory and file name: "ünïcødé-конф-設定" (string
+     * pieces keep every \x escape two digits long) */
+    snprintf(path, sizeof path, "%s/\xc3\xbc" "n\xc3\xaf" "c\xc3\xb8" "d\xc3\xa9-\xd0\xba\xd0\xbe\xd0\xbd\xd1\x84-\xe8\xa8\xad\xe5\xae\x9a", dir);
+    mkdir_utf8(path);
+    {
+        char rc[1100];
+        snprintf(rc, sizeof rc, "%s/matlab-polycallrc-\xc3\x9f", path);
+        write_file(rc, "log_level=info\nmax_connections=7\n", 34);
+        CHECK(matlab_polycall_run_config(rc) == POLYCALL_OK, "non-ASCII config path -> OK (strict)");
+        CHECK(matlab_polycall_describe(rc, &json) == POLYCALL_OK && json && strstr(json, "\"max_connections\":\"7\""),
+              "describe of a non-ASCII config path");
+        matlab_polycall_free(json); json = NULL;
+        snprintf(rc, sizeof rc, "%s/fehlt-\xc3\xbc", path);
+        CHECK(matlab_polycall_run_config(rc) == POLYCALL_E_NOT_FOUND, "missing non-ASCII path -> E_NOT_FOUND");
+    }
 }
 
 /* -------------------------------------------------------------------- call */
@@ -142,8 +203,72 @@ static void test_call(const char *rt)
     CHECK(rc == POLYCALL_E_INVALID_ARGUMENT && out == NULL, "invalid JSON -> E_INVALID_ARGUMENT");
     rc = matlab_polycall_call(rt, "debug", "echo", "1", 0, &out);
     CHECK(rc == POLYCALL_E_INVALID_ARGUMENT, "timeout 0 -> E_INVALID_ARGUMENT");
+    rc = matlab_polycall_call(rt, "debug", "echo", "1", 600000, &out);
+    CHECK(rc == POLYCALL_OK && out && strcmp(out, "{\"echo\":1}") == 0, "timeout 600000 (maximum) accepted");
+    matlab_polycall_free(out); out = NULL;
+    rc = matlab_polycall_call(rt, "debug", "echo", "1", 600001, &out);
+    CHECK(rc == POLYCALL_E_INVALID_ARGUMENT, "timeout 600001 -> E_INVALID_ARGUMENT");
+    matlab_polycall_free(out); out = NULL;
+    rc = matlab_polycall_call(rt, "debug", "echo", "{\"t\":\"h\xc3\xa9llo \xe4\xb8\x96\xe7\x95\x8c\"}", 2000, &out);
+    CHECK(rc == POLYCALL_OK && out && strcmp(out, "{\"echo\":{\"t\":\"h\xc3\xa9llo \xe4\xb8\x96\xe7\x95\x8c\"}}") == 0,
+          "UTF-8 input echoed byte-exact");
+    matlab_polycall_free(out); out = NULL;
     rc = matlab_polycall_call("127.0.0.1:1", "debug", "echo", "1", 1000, &out);
     CHECK(rc == POLYCALL_E_TRANSPORT, "no runtime -> E_TRANSPORT");
+    matlab_polycall_free(out);
+}
+
+typedef struct { const char *rt; int index; int ok; } caller_t;
+
+static THREAD_FN concurrent_call(void *arg)
+{
+    caller_t *c = (caller_t *)arg;
+    int j;
+    c->ok = 1;
+    for (j = 0; j < 10; ++j) {
+        char in[64], want[96], *out = NULL;
+        snprintf(in, sizeof in, "{\"t\":%d,\"j\":%d}", c->index, j);
+        snprintf(want, sizeof want, "{\"echo\":%s}", in);
+        if (matlab_polycall_call(c->rt, "debug", "echo", in, 5000, &out) != POLYCALL_OK || !out || strcmp(out, want) != 0) c->ok = 0;
+        matlab_polycall_free(out);
+    }
+    THREAD_RET;
+}
+
+static void test_concurrent_calls(const char *rt)
+{
+    thread_t ts[8];
+    caller_t cs[8];
+    int i, ok = 1;
+    if (!rt) return;
+    for (i = 0; i < 8; ++i) {
+        cs[i].rt = rt; cs[i].index = i; cs[i].ok = 0;
+        thread_start(&ts[i], concurrent_call, &cs[i]);
+    }
+    for (i = 0; i < 8; ++i) { thread_join(ts[i]); ok &= cs[i].ok; }
+    CHECK(ok, "8 threads x 10 concurrent calls each get their own result");
+}
+
+static void test_daemon(const char *ep)
+{
+    char *out = NULL;
+    int32_t rc;
+    if (!ep) {
+        printf("SKIP daemon call checks: MATLAB_POLYCALL_DAEMON not set\n");
+        return;
+    }
+    rc = matlab_polycall_call(ep, "inventory", "get", "{\"item_id\":\"widget-a\"}", 2000, &out);
+    CHECK(rc == POLYCALL_OK && out && strcmp(out, "{\"item_id\":\"widget-a\",\"quantity\":42,\"in_stock\":true}") == 0,
+          "polycall daemon: inventory.get -> exact output");
+    matlab_polycall_free(out); out = NULL;
+    rc = matlab_polycall_call(ep, "nope", "op", "{}", 2000, &out);
+    CHECK(rc == POLYCALL_E_NOT_FOUND && out && strstr(out, "operation.unknown"), "polycall daemon: unknown operation -> E_NOT_FOUND");
+    matlab_polycall_free(out); out = NULL;
+    rc = matlab_polycall_call(ep, "debug", "sleep", "{\"ms\":2000}", 200, &out);
+    CHECK(rc == POLYCALL_E_TIMEOUT, "polycall daemon: deadline -> E_TIMEOUT");
+    matlab_polycall_free(out); out = NULL;
+    rc = matlab_polycall_call(ep, "inventory", "get", "{}", 2000, &out);
+    CHECK(rc == POLYCALL_E_REMOTE && out && strstr(out, "input.invalid"), "polycall daemon: invalid input -> E_REMOTE");
     matlab_polycall_free(out);
 }
 
@@ -248,12 +373,29 @@ static void test_peers(const char *printer, const char *cli)
     /* too-small buffer: the C layer's growth path keeps the message queued */
     CHECK(polycall_peer_send(a, "matlab-b", payloads[3].data, payloads[3].len, "grow-1", 10000) == POLYCALL_OK, "send 1 MiB for growth");
     {
-        unsigned char small[16];
+        unsigned char tiny[16];   /* not "small": <windows.h> defines it as char */
         size_t need = 0;
-        int32_t rc = polycall_peer_recv(b, 2000, s, sizeof s, m, sizeof m, small, sizeof small, &need);
+        int32_t rc = polycall_peer_recv(b, 2000, s, sizeof s, m, sizeof m, tiny, sizeof tiny, &need);
         CHECK(rc == POLYCALL_E_TOO_LARGE && need == payloads[3].len, "raw recv with a small buffer -> E_TOO_LARGE, needed size");
     }
     CHECK(recv_expect(b, "matlab-a", "grow-1", payloads[3].data, payloads[3].len), "message stayed queued; C layer grows and receives it");
+    CHECK(polycall_peer_send(a, "matlab-b", payloads[3].data, 65536, "grow-64k", 10000) == POLYCALL_OK &&
+          recv_expect(b, "matlab-a", "grow-64k", payloads[3].data, 65536), "exactly 64 KiB (the C layer's first buffer) received");
+    CHECK(polycall_peer_send(a, "matlab-b", payloads[3].data, 65537, "grow-64k1", 10000) == POLYCALL_OK &&
+          recv_expect(b, "matlab-a", "grow-64k1", payloads[3].data, 65537), "64 KiB + 1 received through the growth path");
+    {
+        char rid[64], rep_ep[32];
+        int k, ok = 1;
+        for (k = 0; k < 20; ++k) {
+            snprintf(rid, sizeof rid, "registry-entry-with-a-long-name-%02d", k);
+            snprintf(rep_ep, sizeof rep_ep, "127.0.0.1:%d", 30000 + k);
+            ok &= polycall_peer_register(c, rid, rep_ep) == POLYCALL_OK;
+        }
+        CHECK(ok && matlab_polycall_peer_text(MATLAB_POLYCALL_PEER_LIST, c, &text) == POLYCALL_OK && strlen(text) > 512 &&
+              strstr(text, "\"registry-entry-with-a-long-name-19\":\"127.0.0.1:30019\""),
+              "peer list grows its buffer past 512 bytes (20 entries)");
+        matlab_polycall_free(text); text = NULL;
+    }
 
     /* concurrent senders */
     for (i = 0; i < 8; ++i) {
@@ -341,6 +483,8 @@ int main(int argc, char **argv)
     make_payloads();
     test_config();
     test_call(getenv("MATLAB_POLYCALL_RUNTIME"));
+    test_concurrent_calls(getenv("MATLAB_POLYCALL_RUNTIME"));
+    test_daemon(getenv("MATLAB_POLYCALL_DAEMON"));
     test_peers(getenv("MATLAB_POLYCALL_PEER"), getenv("POLYCALL_CLI"));
     printf("%d checks, %d failed\n", checks, failures);
     {
