@@ -3,6 +3,7 @@
   "package": "@obinexusltd/matlab-polycall",
   "version": "1.1.0",
   "language": "MATLAB",
+  "repository": "https://github.com/obinexus/matlab-polycall",
   "adapter": true,
   "ffi": true,
   "entry_point": "polycall_ffi_run_config",
@@ -11,5 +12,6 @@
   "core": "polycall >= 1.1.0 (binding ABI 1)",
   "core_repository": "https://github.com/obinexus/polycall",
   "license": "MIT",
-  "author": "Nnamdi Michael Okpala"
+  "author": "Nnamdi Michael Okpala",
+  "test": "make test-matlab"
 }

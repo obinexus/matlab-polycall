@@ -1,0 +1,24 @@
+# QA descriptor for the Polycall binding matrix (read by polycall/qa/run_qa.py).
+# This repository is NOT a Python package and is not pip-installable;
+# its native manifest is package.json (npm source package of the MATLAB / MEX sources).
+#
+# support = "partial": the whole binding ABI v1 surface is implemented, but it
+# has never run in MATLAB (no licence during QA). The test command needs MATLAB
+# (and its mex) in the image and exits 77 (SKIP) without it. Supplementary,
+# non-MATLAB checks in debian:13 with octave octave-dev valgrind:
+#   make test-core test-core-valgrind test-core-asan test-core-helgrind
+#   make test-octave test-loader-octave test-octave-asan
+[tool.polycall.binding]
+name = "matlab-polycall"
+language = "MATLAB"
+native_manifest = "package.json"
+registry = "npm"
+package = "@obinexusltd/matlab-polycall"
+abi = 1
+support = "partial"
+linux_image = "debian:13"
+build = "make mex"
+test = "make test-matlab test-loader-matlab"
+# MSYS2 / Git Bash with MATLAB and mex on PATH, <prefix>/bin on PATH,
+# PKG_CONFIG_PATH=<prefix>/lib/pkgconfig (loader tests are Linux-only)
+windows_test = "make test-matlab"

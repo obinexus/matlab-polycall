@@ -1,15 +1,14 @@
 # TODO — matlab-polycall
 
-Status: implemented thin MATLAB/MEX adapter for libpolycall 1.5.
+Status: MATLAB binding over the Polycall binding ABI v1 (polycall >= 1.1.0):
+MEX gateway + C layer over `<polycall.h>` + the `+obinexus/+polycall` package.
 
-- [x] Publishable `@obinexusltd/matlab-polycall` npm source package
-- [x] MATLAB package namespace with status and exception APIs
-- [x] UTF-8 MEX gateway with correct MATLAB memory ownership
-- [x] Exact `polycall_ffi_run_config(config_path, 1)` forwarding
-- [x] Portable MATLAB build function and shell Makefile
-- [x] Native forwarding test and MATLAB unit tests
-- [x] Thin-adapter source audit for Windows and POSIX shells
-- [ ] Exercise the MEX test suite in MATLAB release CI
-- [ ] Publish signed platform-specific MEX binaries
+- [x] C layer and MEX gateway: runConfig, runConfigOrError, describe, call, callJson, Peer
+- [x] UTF-8 in and out; MEX file locked while peers are open; immediate binding against old libraries
+- [x] C-layer tests against the real core (Linux; Windows MSVC and UCRT64), valgrind, ASan + UBSan, helgrind
+- [x] GNU Octave compatibility run of the gateway, the M tests and the loader tests (not MATLAB evidence)
+- [ ] Run `make test-matlab` and `make test-loader-matlab` in MATLAB (QA had no MATLAB licence)
+- [ ] Windows MATLAB run (`build_matlab_polycall("<prefix>")`, then the MATLAB tests)
+- [ ] Publish the npm source package / signed MEX binaries (not done by QA)
 
 Do not add configuration parsing or runtime policy here; adapt the core only.

@@ -34,7 +34,9 @@
     "test:package": "node --test tests/package.test.js",
     "verify:dry": "sh scripts/verify-dry.sh",
     "verify": "npm test && make test-core",
-    "prepack": "npm test"
+    "prepack": "npm test",
+    "test:loader:matlab": "make test-loader-matlab",
+    "test:loader:octave": "make test-loader-octave"
   },
   "repository": {
     "type": "git",
