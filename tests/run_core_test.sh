@@ -27,7 +27,13 @@ POLYCALL_DEV_TOKEN="ml-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
 export POLYCALL_DEV_TOKEN
 pids=''
 cleanup() {
-    [ -f "$scratch/daemon/daemon.json" ] && "$cli" daemon stop --state-dir "$scratch/daemon" "$scratch/Polycallfile" >/dev/null 2>&1
+    if [ -f "$scratch/daemon/daemon.json" ]; then
+        # authenticated graceful stop; if that fails, --force terminates it
+        # after the wait, so no daemon outlives the run
+        "$cli" daemon stop --state-dir "$scratch/daemon" "$scratch/Polycallfile" >/dev/null 2>&1 ||
+            "$cli" daemon stop --force --state-dir "$scratch/daemon" "$scratch/Polycallfile" >/dev/null 2>&1 ||
+            echo "WARNING: polycall daemon in $scratch/daemon did not stop" >&2
+    fi
     for p in $pids; do kill "$p" 2>/dev/null; done
     sleep 0.3
     rm -rf "$scratch"
