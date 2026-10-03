@@ -5,7 +5,7 @@ const path = require('node:path');
 const fromPackageRoot = (...parts) => path.join(__dirname, ...parts);
 
 module.exports = Object.freeze({
-  packageName: '@obinexusltd/matlab-polycall',
+  packageName: 'matlab-polycall',
   matlabPackage: fromPackageRoot('src', '+obinexus', '+polycall'),
   runConfig: fromPackageRoot('src', '+obinexus', '+polycall', 'runConfig.m'),
   runConfigOrError: fromPackageRoot('src', '+obinexus', '+polycall', 'runConfigOrError.m'),

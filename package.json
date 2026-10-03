@@ -1,5 +1,5 @@
 {
-  "name": "@obinexusltd/matlab-polycall",
+  "name": "matlab-polycall",
   "version": "1.1.0",
   "description": "MATLAB MEX source binding for Polycall (binding ABI v1): runConfig, call, Peer",
   "main": "index.js",

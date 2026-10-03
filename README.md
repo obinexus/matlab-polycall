@@ -1,4 +1,4 @@
-# @obinexusltd/matlab-polycall
+# matlab-polycall
 
 MATLAB binding for the [Polycall](https://github.com/obinexus/polycall) C
 library, **binding ABI v1** (`polycall >= 1.1.0`): a MEX gateway
@@ -9,7 +9,7 @@ that calls `<polycall.h>` directly, and the MATLAB package
 Configuration parsing, validation, networking and runtime policy stay in
 libpolycall; this binding converts MATLAB values, sizes buffers and turns
 status codes into MATLAB errors. npm source package:
-`@obinexusltd/matlab-polycall` (not published yet). It ships sources only —
+`matlab-polycall` (not published yet). It ships sources only —
 build the MEX file for your MATLAB and platform.
 
 > **Test status.** The MATLAB tests have **not** been run: QA had no MATLAB

@@ -1,6 +1,6 @@
 {
   "name": "matlab-polycall",
-  "package": "@obinexusltd/matlab-polycall",
+  "package": "matlab-polycall",
   "version": "1.1.0",
   "language": "MATLAB",
   "repository": "https://github.com/obinexus/matlab-polycall",

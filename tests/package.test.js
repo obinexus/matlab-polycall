@@ -11,7 +11,7 @@ const metadata = require('../package.json');
 const manifest = require('../polycall-binding.json');
 
 test('npm metadata', () => {
-  assert.equal(metadata.name, '@obinexusltd/matlab-polycall');
+  assert.equal(metadata.name, 'matlab-polycall');
   assert.equal(metadata.license, 'MIT');
   assert.equal(metadata.publishConfig.access, 'public');
   assert.equal(metadata.author, 'Nnamdi Michael Okpala <okpalan@protonmail.com>');
